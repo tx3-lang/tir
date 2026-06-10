@@ -58,8 +58,7 @@ pub enum BuiltInOp {
     Concat(Expression, Expression),
     Negate(Expression),
     Property(Expression, Expression),
-    // Appended last to preserve the serde (name-tagged CBOR) encoding of the
-    // existing variants; see the TIR backward-compatibility notes.
+    // v1beta0 end
     Mul(Expression, Expression),
 }
 
