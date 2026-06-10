@@ -90,6 +90,7 @@ pub trait Arithmetic {
     fn add(self, other: Expression) -> Result<Expression, Error>;
     fn sub(self, other: Expression) -> Result<Expression, Error>;
     fn mul(self, other: Expression) -> Result<Expression, Error>;
+    fn div(self, other: Expression) -> Result<Expression, Error>;
     fn neg(self) -> Result<Expression, Error>;
 }
 
@@ -131,6 +132,29 @@ where
             Expression::None => Ok(Expression::None),
             other => Err(Error::InvalidBinaryOp(
                 "mul".to_string(),
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
+        }
+    }
+
+    fn div(self, other: Expression) -> Result<Expression, Error> {
+        // Assets can only be scaled down by a scalar divisor; asset-by-asset
+        // division is undefined. Division does not commute, so there is no
+        // `Int / AnyAsset` counterpart.
+        match other {
+            Expression::Number(0) => Err(Error::InvalidBinaryOp(
+                "div".to_string(),
+                format!("{self:?}"),
+                "zero".to_string(),
+            )),
+            Expression::Number(divisor) => {
+                let scaled = self.into() / divisor;
+                Ok(Expression::Assets(scaled.into()))
+            }
+            Expression::None => Ok(Expression::None),
+            other => Err(Error::InvalidBinaryOp(
+                "div".to_string(),
                 format!("{self:?}"),
                 format!("{other:?}"),
             )),
@@ -179,6 +203,25 @@ impl Arithmetic for i128 {
         }
     }
 
+    fn div(self, other: Expression) -> Result<Expression, Error> {
+        match other {
+            Expression::Number(0) => Err(Error::InvalidBinaryOp(
+                "div".to_string(),
+                format!("{self:?}"),
+                "zero".to_string(),
+            )),
+            Expression::Number(y) => Ok(Expression::Number(self / y)),
+            // `Int / AnyAsset` is undefined (division does not commute), so no
+            // `Assets` arm here.
+            Expression::None => Ok(Expression::None),
+            _ => Err(Error::InvalidBinaryOp(
+                "div".to_string(),
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
+        }
+    }
+
     fn neg(self) -> Result<Expression, Error> {
         Ok(Expression::Number(-self))
     }
@@ -220,6 +263,21 @@ impl Arithmetic for Expression {
             Expression::Assets(x) => Arithmetic::mul(x, other),
             x => Err(Error::InvalidBinaryOp(
                 "mul".to_string(),
+                format!("{x:?}"),
+                format!("{other:?}"),
+            )),
+        }
+    }
+
+    fn div(self, other: Expression) -> Result<Expression, Error> {
+        match self {
+            // `None` is absorbing for `/` (same as `*`) so partial reductions
+            // never fabricate a quotient.
+            Expression::None => Ok(Expression::None),
+            Expression::Number(x) => Arithmetic::div(x, other),
+            Expression::Assets(x) => Arithmetic::div(x, other),
+            x => Err(Error::InvalidBinaryOp(
+                "div".to_string(),
                 format!("{x:?}"),
                 format!("{other:?}"),
             )),
@@ -669,6 +727,7 @@ impl Composite for BuiltInOp {
             Self::Add(x, y) => vec![x, y],
             Self::Sub(x, y) => vec![x, y],
             Self::Mul(x, y) => vec![x, y],
+            Self::Div(x, y) => vec![x, y],
             Self::Concat(x, y) => vec![x, y],
             Self::Negate(x) => vec![x],
             Self::Property(x, _) => vec![x],
@@ -684,6 +743,7 @@ impl Composite for BuiltInOp {
             Self::Add(x, y) => Ok(Self::Add(f(x)?, f(y)?)),
             Self::Sub(x, y) => Ok(Self::Sub(f(x)?, f(y)?)),
             Self::Mul(x, y) => Ok(Self::Mul(f(x)?, f(y)?)),
+            Self::Div(x, y) => Ok(Self::Div(f(x)?, f(y)?)),
             Self::Concat(x, y) => Ok(Self::Concat(f(x)?, f(y)?)),
             Self::Negate(x) => Ok(Self::Negate(f(x)?)),
             Self::Property(x, prop) => Ok(Self::Property(f(x)?, prop)),
@@ -695,6 +755,7 @@ impl Composite for BuiltInOp {
             Self::Add(x, y) => Ok(Self::NoOp(x.add(y)?)),
             Self::Sub(x, y) => Ok(Self::NoOp(x.sub(y)?)),
             Self::Mul(x, y) => Ok(Self::NoOp(x.mul(y)?)),
+            Self::Div(x, y) => Ok(Self::NoOp(x.div(y)?)),
             Self::Concat(x, y) => Ok(Self::NoOp(x.concat(y)?)),
             Self::Negate(x) => Ok(Self::NoOp(x.neg()?)),
             Self::Property(x, prop) => Ok(Self::NoOp(x.index_or_err(prop)?)),
@@ -707,6 +768,7 @@ impl Composite for BuiltInOp {
             Self::Add(x, y) => Ok(Self::Add(x.reduce()?, y.reduce()?)),
             Self::Sub(x, y) => Ok(Self::Sub(x.reduce()?, y.reduce()?)),
             Self::Mul(x, y) => Ok(Self::Mul(x.reduce()?, y.reduce()?)),
+            Self::Div(x, y) => Ok(Self::Div(x.reduce()?, y.reduce()?)),
             Self::Concat(x, y) => Ok(Self::Concat(x.reduce()?, y.reduce()?)),
             Self::Negate(x) => Ok(Self::Negate(x.reduce()?)),
             Self::Property(x, y) => Ok(Self::Property(x.reduce()?, y.reduce()?)),
@@ -1816,6 +1878,68 @@ mod tests {
             }
             _ => panic!("Expected assets"),
         };
+    }
+
+    #[test]
+    fn numeric_div_is_reduced() {
+        // Integer division truncates toward zero: 9 / 2 == 4.
+        let op = Expression::EvalBuiltIn(Box::new(BuiltInOp::Div(
+            Expression::Number(9),
+            Expression::Number(2),
+        )));
+
+        let after = op.reduce().unwrap();
+
+        assert_eq!(after, Expression::Number(4));
+    }
+
+    #[test]
+    fn div_binds_like_mul_is_reduced() {
+        // 8 / 4 * 2 is left-associative at the multiplicative level == (8/4)*2 == 4.
+        let op = Expression::EvalBuiltIn(Box::new(BuiltInOp::Mul(
+            Expression::EvalBuiltIn(Box::new(BuiltInOp::Div(
+                Expression::Number(8),
+                Expression::Number(4),
+            ))),
+            Expression::Number(2),
+        )));
+
+        let after = op.reduce().unwrap();
+
+        assert_eq!(after, Expression::Number(4));
+    }
+
+    #[test]
+    fn asset_divided_is_reduced() {
+        // AnyAsset / Int divides every quantity (truncating).
+        let op = Expression::EvalBuiltIn(Box::new(BuiltInOp::Div(
+            Expression::Assets(vec![AssetExpr {
+                policy: Expression::Bytes(b"abc".to_vec()),
+                asset_name: Expression::Bytes(b"111".to_vec()),
+                amount: Expression::Number(300),
+            }]),
+            Expression::Number(2),
+        )));
+
+        let reduced = op.reduce().unwrap();
+
+        match reduced {
+            Expression::Assets(assets) => {
+                assert_eq!(assets.len(), 1);
+                assert_eq!(assets[0].amount, Expression::Number(150));
+            }
+            _ => panic!("Expected assets"),
+        };
+    }
+
+    #[test]
+    fn div_by_zero_errors() {
+        let op = Expression::EvalBuiltIn(Box::new(BuiltInOp::Div(
+            Expression::Number(5),
+            Expression::Number(0),
+        )));
+
+        assert!(op.reduce().is_err());
     }
 
     #[test]

@@ -305,6 +305,25 @@ impl std::ops::Mul<i128> for CanonicalAssets {
     }
 }
 
+impl std::ops::Div<i128> for CanonicalAssets {
+    type Output = Self;
+
+    /// Divide every asset quantity by a scalar divisor (integer division,
+    /// truncating toward zero). Quantities that truncate to `0` are dropped by
+    /// the `retain`. The caller guarantees a non-zero divisor.
+    fn div(self, divisor: i128) -> Self {
+        let mut scaled = self.0;
+
+        for value in scaled.values_mut() {
+            *value /= divisor;
+        }
+
+        scaled.retain(|_, &mut value| value != 0);
+
+        Self(scaled)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
