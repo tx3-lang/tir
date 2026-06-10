@@ -89,6 +89,7 @@ pub trait Concatenable {
 pub trait Arithmetic {
     fn add(self, other: Expression) -> Result<Expression, Error>;
     fn sub(self, other: Expression) -> Result<Expression, Error>;
+    fn mul(self, other: Expression) -> Result<Expression, Error>;
     fn neg(self) -> Result<Expression, Error>;
 }
 
@@ -119,6 +120,23 @@ where
         self.add(other_neg)
     }
 
+    fn mul(self, other: Expression) -> Result<Expression, Error> {
+        // Assets can only be scaled by a scalar; asset-by-asset multiplication
+        // is undefined.
+        match other {
+            Expression::Number(factor) => {
+                let scaled = self.into() * factor;
+                Ok(Expression::Assets(scaled.into()))
+            }
+            Expression::None => Ok(Expression::None),
+            other => Err(Error::InvalidBinaryOp(
+                "mul".to_string(),
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
+        }
+    }
+
     fn neg(self) -> Result<Expression, Error> {
         let negated = std::ops::Neg::neg(self.into());
         Ok(Expression::Assets(negated.into()))
@@ -141,6 +159,24 @@ impl Arithmetic for i128 {
     fn sub(self, other: Expression) -> Result<Expression, Error> {
         let other_neg = other.neg()?;
         self.add(other_neg)
+    }
+
+    fn mul(self, other: Expression) -> Result<Expression, Error> {
+        match other {
+            Expression::Number(y) => Ok(Expression::Number(self * y)),
+            // `Int * AnyAsset` scales the asset quantities (commutes with the
+            // `AnyAsset * Int` case handled by the asset impl above).
+            Expression::Assets(y) => {
+                let scaled = CanonicalAssets::from(y) * self;
+                Ok(Expression::Assets(scaled.into()))
+            }
+            Expression::None => Ok(Expression::None),
+            _ => Err(Error::InvalidBinaryOp(
+                "mul".to_string(),
+                format!("{self:?}"),
+                format!("{other:?}"),
+            )),
+        }
     }
 
     fn neg(self) -> Result<Expression, Error> {
@@ -169,6 +205,21 @@ impl Arithmetic for Expression {
             Expression::Assets(x) => Arithmetic::sub(x, other),
             x => Err(Error::InvalidBinaryOp(
                 "sub".to_string(),
+                format!("{x:?}"),
+                format!("{other:?}"),
+            )),
+        }
+    }
+
+    fn mul(self, other: Expression) -> Result<Expression, Error> {
+        match self {
+            // `None` is absorbing for `*` (unlike `+`/`-`, where it is the 0
+            // identity) so partial reductions never fabricate a product.
+            Expression::None => Ok(Expression::None),
+            Expression::Number(x) => Arithmetic::mul(x, other),
+            Expression::Assets(x) => Arithmetic::mul(x, other),
+            x => Err(Error::InvalidBinaryOp(
+                "mul".to_string(),
                 format!("{x:?}"),
                 format!("{other:?}"),
             )),
@@ -617,6 +668,7 @@ impl Composite for BuiltInOp {
             Self::NoOp(x) => vec![x],
             Self::Add(x, y) => vec![x, y],
             Self::Sub(x, y) => vec![x, y],
+            Self::Mul(x, y) => vec![x, y],
             Self::Concat(x, y) => vec![x, y],
             Self::Negate(x) => vec![x],
             Self::Property(x, _) => vec![x],
@@ -631,6 +683,7 @@ impl Composite for BuiltInOp {
             Self::NoOp(x) => Ok(Self::NoOp(f(x)?)),
             Self::Add(x, y) => Ok(Self::Add(f(x)?, f(y)?)),
             Self::Sub(x, y) => Ok(Self::Sub(f(x)?, f(y)?)),
+            Self::Mul(x, y) => Ok(Self::Mul(f(x)?, f(y)?)),
             Self::Concat(x, y) => Ok(Self::Concat(f(x)?, f(y)?)),
             Self::Negate(x) => Ok(Self::Negate(f(x)?)),
             Self::Property(x, prop) => Ok(Self::Property(f(x)?, prop)),
@@ -641,6 +694,7 @@ impl Composite for BuiltInOp {
         match self {
             Self::Add(x, y) => Ok(Self::NoOp(x.add(y)?)),
             Self::Sub(x, y) => Ok(Self::NoOp(x.sub(y)?)),
+            Self::Mul(x, y) => Ok(Self::NoOp(x.mul(y)?)),
             Self::Concat(x, y) => Ok(Self::NoOp(x.concat(y)?)),
             Self::Negate(x) => Ok(Self::NoOp(x.neg()?)),
             Self::Property(x, prop) => Ok(Self::NoOp(x.index_or_err(prop)?)),
@@ -652,6 +706,7 @@ impl Composite for BuiltInOp {
         match self {
             Self::Add(x, y) => Ok(Self::Add(x.reduce()?, y.reduce()?)),
             Self::Sub(x, y) => Ok(Self::Sub(x.reduce()?, y.reduce()?)),
+            Self::Mul(x, y) => Ok(Self::Mul(x.reduce()?, y.reduce()?)),
             Self::Concat(x, y) => Ok(Self::Concat(x.reduce()?, y.reduce()?)),
             Self::Negate(x) => Ok(Self::Negate(x.reduce()?)),
             Self::Property(x, y) => Ok(Self::Property(x.reduce()?, y.reduce()?)),
@@ -1685,6 +1740,82 @@ mod tests {
         let after = op.reduce().unwrap();
 
         assert_eq!(after, Expression::Number(3));
+    }
+
+    #[test]
+    fn numeric_mul_is_reduced() {
+        let op = Expression::EvalBuiltIn(Box::new(BuiltInOp::Mul(
+            Expression::Number(6),
+            Expression::Number(7),
+        )));
+
+        let after = op.reduce().unwrap();
+
+        assert_eq!(after, Expression::Number(42));
+    }
+
+    #[test]
+    fn mul_binds_tighter_than_add_is_reduced() {
+        // 2 + 3 * 4 == 14 (mul reduces before the surrounding add)
+        let op = Expression::EvalBuiltIn(Box::new(BuiltInOp::Add(
+            Expression::Number(2),
+            Expression::EvalBuiltIn(Box::new(BuiltInOp::Mul(
+                Expression::Number(3),
+                Expression::Number(4),
+            ))),
+        )));
+
+        let after = op.reduce().unwrap();
+
+        assert_eq!(after, Expression::Number(14));
+    }
+
+    #[test]
+    fn asset_scaled_is_reduced() {
+        // AnyAsset * Int scales every quantity.
+        let op = Expression::EvalBuiltIn(Box::new(BuiltInOp::Mul(
+            Expression::Assets(vec![AssetExpr {
+                policy: Expression::Bytes(b"abc".to_vec()),
+                asset_name: Expression::Bytes(b"111".to_vec()),
+                amount: Expression::Number(100),
+            }]),
+            Expression::Number(3),
+        )));
+
+        let reduced = op.reduce().unwrap();
+
+        match reduced {
+            Expression::Assets(assets) => {
+                assert_eq!(assets.len(), 1);
+                assert_eq!(assets[0].policy, Expression::Bytes(b"abc".to_vec()));
+                assert_eq!(assets[0].asset_name, Expression::Bytes(b"111".to_vec()));
+                assert_eq!(assets[0].amount, Expression::Number(300));
+            }
+            _ => panic!("Expected assets"),
+        };
+    }
+
+    #[test]
+    fn asset_scaled_commutes_is_reduced() {
+        // Int * AnyAsset scales identically to AnyAsset * Int.
+        let op = Expression::EvalBuiltIn(Box::new(BuiltInOp::Mul(
+            Expression::Number(3),
+            Expression::Assets(vec![AssetExpr {
+                policy: Expression::Bytes(b"abc".to_vec()),
+                asset_name: Expression::Bytes(b"111".to_vec()),
+                amount: Expression::Number(100),
+            }]),
+        )));
+
+        let reduced = op.reduce().unwrap();
+
+        match reduced {
+            Expression::Assets(assets) => {
+                assert_eq!(assets.len(), 1);
+                assert_eq!(assets[0].amount, Expression::Number(300));
+            }
+            _ => panic!("Expected assets"),
+        };
     }
 
     #[test]

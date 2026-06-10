@@ -58,6 +58,8 @@ pub enum BuiltInOp {
     Concat(Expression, Expression),
     Negate(Expression),
     Property(Expression, Expression),
+    // end v1beta0 1st publish
+    Mul(Expression, Expression),
 }
 
 /// Operations that are performed by the compiler.
@@ -435,6 +437,7 @@ impl Node for BuiltInOp {
             BuiltInOp::NoOp(x) => BuiltInOp::NoOp(x.apply(visitor)?),
             BuiltInOp::Add(a, b) => BuiltInOp::Add(a.apply(visitor)?, b.apply(visitor)?),
             BuiltInOp::Sub(a, b) => BuiltInOp::Sub(a.apply(visitor)?, b.apply(visitor)?),
+            BuiltInOp::Mul(a, b) => BuiltInOp::Mul(a.apply(visitor)?, b.apply(visitor)?),
             BuiltInOp::Concat(a, b) => BuiltInOp::Concat(a.apply(visitor)?, b.apply(visitor)?),
             BuiltInOp::Negate(x) => BuiltInOp::Negate(x.apply(visitor)?),
             BuiltInOp::Property(x, i) => BuiltInOp::Property(x.apply(visitor)?, i),
