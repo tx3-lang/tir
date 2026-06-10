@@ -287,6 +287,24 @@ impl std::ops::Sub for CanonicalAssets {
     }
 }
 
+impl std::ops::Mul<i128> for CanonicalAssets {
+    type Output = Self;
+
+    /// Scale every asset quantity by a scalar factor. A factor of `0` yields the
+    /// empty asset set (the `retain` drops the zeroed entries).
+    fn mul(self, factor: i128) -> Self {
+        let mut scaled = self.0;
+
+        for value in scaled.values_mut() {
+            *value *= factor;
+        }
+
+        scaled.retain(|_, &mut value| value != 0);
+
+        Self(scaled)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

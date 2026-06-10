@@ -172,4 +172,29 @@ mod tests {
             decode_version_snapshot(version);
         }
     }
+
+    /// The serde/CBOR representation of `BuiltInOp` must stay **name-tagged**
+    /// (each variant encodes under its name, e.g. `{"Negate": ...}`), never
+    /// positional. This is what lets us append new variants such as `Mul`
+    /// without changing the on-the-wire encoding of the existing ones — old TIR
+    /// keeps decoding and `*`-free TIR stays byte-identical.
+    #[test]
+    fn builtin_op_is_name_tagged_and_mul_round_trips() {
+        use crate::model::v1beta0::{BuiltInOp, Expression};
+
+        let op = BuiltInOp::Negate(Expression::Number(7));
+        let mut bytes = Vec::new();
+        ciborium::into_writer(&op, &mut bytes).unwrap();
+        // The variant name appears verbatim in the bytes only under name tagging.
+        assert!(
+            String::from_utf8_lossy(&bytes).contains("Negate"),
+            "expected a name-tagged encoding, got {bytes:?}",
+        );
+
+        let mul = BuiltInOp::Mul(Expression::Number(6), Expression::Number(7));
+        let mut mul_bytes = Vec::new();
+        ciborium::into_writer(&mul, &mut mul_bytes).unwrap();
+        let decoded: BuiltInOp = ciborium::from_reader(&mul_bytes[..]).unwrap();
+        assert_eq!(decoded, mul);
+    }
 }
