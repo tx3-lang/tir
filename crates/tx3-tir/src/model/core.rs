@@ -196,6 +196,7 @@ pub enum Type {
     List,
     Map,
     Custom(String),
+    Tuple,
 }
 
 #[cfg(test)]
