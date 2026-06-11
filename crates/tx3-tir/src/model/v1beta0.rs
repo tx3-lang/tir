@@ -190,7 +190,7 @@ pub enum Expression {
 
     List(Vec<Expression>),
     Map(Vec<(Expression, Expression)>),
-    Tuple(Box<(Expression, Expression)>),
+    Tuple(Vec<Expression>),
     Struct(StructExpr),
     Bytes(Vec<u8>),
     Number(i128),

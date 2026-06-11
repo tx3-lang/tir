@@ -69,13 +69,9 @@ impl Indexable for Expression {
             Expression::Map(x) => x
                 .iter()
                 .find(|(k, _)| *k == index)
-                .map(|(k, v)| Expression::Tuple(Box::new((k.clone(), v.clone())))),
+                .map(|(k, v)| Expression::Tuple(vec![k.clone(), v.clone()])),
             Expression::List(x) => x.get(index.as_number()? as usize).cloned(),
-            Expression::Tuple(x) => match index.as_number()? {
-                0 => Some(x.0.clone()),
-                1 => Some(x.1.clone()),
-                _ => None,
-            },
+            Expression::Tuple(x) => x.get(index.as_number()? as usize).cloned(),
             Expression::Struct(x) => x.index(index.clone()),
             _ => None,
         }
@@ -971,10 +967,11 @@ impl Apply for Expression {
                     .map(|x| x.apply_args(args))
                     .collect::<Result<_, _>>()?,
             )),
-            Self::Tuple(x) => Ok(Self::Tuple(Box::new((
-                x.0.apply_args(args)?,
-                x.1.apply_args(args)?,
-            )))),
+            Self::Tuple(x) => Ok(Self::Tuple(
+                x.into_iter()
+                    .map(|x| x.apply_args(args))
+                    .collect::<Result<_, _>>()?,
+            )),
             Self::Map(x) => Ok(Self::Map(
                 x.into_iter()
                     .map(|(k, v)| {
@@ -1029,10 +1026,11 @@ impl Apply for Expression {
                     })
                     .collect::<Result<_, _>>()?,
             )),
-            Self::Tuple(x) => Ok(Self::Tuple(Box::new((
-                x.0.apply_inputs(args)?,
-                x.1.apply_inputs(args)?,
-            )))),
+            Self::Tuple(x) => Ok(Self::Tuple(
+                x.into_iter()
+                    .map(|x| x.apply_inputs(args))
+                    .collect::<Result<_, _>>()?,
+            )),
             Self::Struct(x) => Ok(Self::Struct(x.apply_inputs(args)?)),
             Self::Assets(x) => Ok(Self::Assets(
                 x.into_iter()
@@ -1077,10 +1075,11 @@ impl Apply for Expression {
                     })
                     .collect::<Result<_, _>>()?,
             )),
-            Self::Tuple(x) => Ok(Self::Tuple(Box::new((
-                x.0.apply_fees(fees)?,
-                x.1.apply_fees(fees)?,
-            )))),
+            Self::Tuple(x) => Ok(Self::Tuple(
+                x.into_iter()
+                    .map(|x| x.apply_fees(fees))
+                    .collect::<Result<_, _>>()?,
+            )),
             Self::Struct(x) => Ok(Self::Struct(x.apply_fees(fees)?)),
             Self::Assets(x) => Ok(Self::Assets(
                 x.into_iter()
@@ -1112,7 +1111,7 @@ impl Apply for Expression {
         match self {
             Self::List(x) => x.iter().all(|x| x.is_constant()),
             Self::Map(x) => x.iter().all(|(k, v)| k.is_constant() && v.is_constant()),
-            Self::Tuple(x) => x.0.is_constant() && x.1.is_constant(),
+            Self::Tuple(x) => x.iter().all(|x| x.is_constant()),
             Self::Struct(x) => x.is_constant(),
             Self::Assets(x) => x.iter().all(|x| x.is_constant()),
             Self::EvalParam(x) => x.is_constant(),
@@ -1143,7 +1142,7 @@ impl Apply for Expression {
                 .iter()
                 .flat_map(|(k, v)| [k.params(), v.params()].into_iter().flatten())
                 .collect(),
-            Self::Tuple(x) => [x.0.params(), x.1.params()].into_iter().flatten().collect(),
+            Self::Tuple(x) => x.iter().flat_map(|x| x.params()).collect(),
             Self::Struct(x) => x.params(),
             Self::Assets(x) => x.iter().flat_map(|x| x.params()).collect(),
             Self::EvalParam(x) => x.params(),
@@ -1174,10 +1173,7 @@ impl Apply for Expression {
                 .iter()
                 .flat_map(|(k, v)| [k.queries(), v.queries()].into_iter().flatten())
                 .collect(),
-            Self::Tuple(x) => [x.0.queries(), x.1.queries()]
-                .into_iter()
-                .flatten()
-                .collect(),
+            Self::Tuple(x) => x.iter().flat_map(|x| x.queries()).collect(),
             Self::Struct(x) => x.queries(),
             Self::Assets(x) => x.iter().flat_map(|x| x.queries()).collect(),
             Self::EvalParam(x) => x.queries(),
@@ -1214,7 +1210,11 @@ impl Apply for Expression {
                     .map(|(k, v)| Ok::<(Expression, Expression), Error>((k.reduce()?, v.reduce()?)))
                     .collect::<Result<_, _>>()?,
             )),
-            Expression::Tuple(x) => Ok(Self::Tuple(Box::new((x.0.reduce()?, x.1.reduce()?)))),
+            Expression::Tuple(x) => Ok(Self::Tuple(
+                x.into_iter()
+                    .map(|x| x.reduce())
+                    .collect::<Result<_, _>>()?,
+            )),
             Expression::Struct(x) => Ok(Self::Struct(x.reduce()?)),
             Expression::Assets(x) => Ok(Self::Assets(
                 x.into_iter()
@@ -2155,7 +2155,11 @@ mod tests {
 
     #[test]
     fn test_reduce_tuple_property_access() {
-        let object = Expression::Tuple(Box::new((Expression::Number(1), Expression::Number(2))));
+        let object = Expression::Tuple(vec![
+            Expression::Number(1),
+            Expression::Number(2),
+            Expression::Number(3),
+        ]);
 
         let op = Expression::EvalBuiltIn(Box::new(BuiltInOp::Property(
             object.clone(),
@@ -2167,6 +2171,17 @@ mod tests {
         match reduced {
             Ok(Expression::Number(2)) => (),
             _ => panic!("Expected number 2"),
+        };
+
+        // last element of an N-tuple is reachable
+        let op = Expression::EvalBuiltIn(Box::new(BuiltInOp::Property(
+            object.clone(),
+            Expression::Number(2),
+        )));
+
+        match op.reduce() {
+            Ok(Expression::Number(3)) => (),
+            _ => panic!("Expected number 3"),
         };
 
         let op = Expression::EvalBuiltIn(Box::new(BuiltInOp::Property(
@@ -2342,10 +2357,10 @@ mod tests {
 
     #[test]
     fn test_index_tuple_with_expression() {
-        let tuple = Expression::Tuple(Box::new((
+        let tuple = Expression::Tuple(vec![
             Expression::String("left".to_string()),
             Expression::String("right".to_string()),
-        )));
+        ]);
 
         let index_expr = Expression::Number(0);
         let op = Expression::EvalBuiltIn(Box::new(BuiltInOp::Property(tuple.clone(), index_expr)));
@@ -2366,6 +2381,42 @@ mod tests {
             Expression::String(s) => assert_eq!(s, "right"),
             _ => panic!("Expected string 'right'"),
         }
+    }
+
+    #[test]
+    fn test_n_tuple_params_and_apply() {
+        // a 3-tuple mixing a constant and two params
+        let tuple = Expression::Tuple(vec![
+            Expression::Number(1),
+            Expression::EvalParam(Box::new(Param::ExpectValue("a".to_string(), Type::Int))),
+            Expression::EvalParam(Box::new(Param::ExpectValue("b".to_string(), Type::Bytes))),
+        ]);
+
+        // params are collected across every element
+        let params = tuple.params();
+        assert_eq!(params.len(), 2);
+        assert_eq!(params.get("a"), Some(&Type::Int));
+        assert_eq!(params.get("b"), Some(&Type::Bytes));
+
+        // a parameterized tuple is not constant
+        assert!(!tuple.is_constant());
+
+        let args = BTreeMap::from([
+            ("a".to_string(), ArgValue::Int(42)),
+            ("b".to_string(), ArgValue::Bytes(vec![0xff])),
+        ]);
+
+        let reduced = tuple.apply_args(&args).unwrap().reduce().unwrap();
+
+        assert_eq!(
+            reduced,
+            Expression::Tuple(vec![
+                Expression::Number(1),
+                Expression::Number(42),
+                Expression::Bytes(vec![0xff]),
+            ])
+        );
+        assert!(reduced.is_constant());
     }
 
     #[test]
@@ -2421,8 +2472,11 @@ mod tests {
         let result = list_expr.index(Expression::Number(2));
         assert_eq!(result, None);
 
-        let tuple_expr =
-            Expression::Tuple(Box::new((Expression::Number(100), Expression::Number(200))));
+        let tuple_expr = Expression::Tuple(vec![
+            Expression::Number(100),
+            Expression::Number(200),
+            Expression::Number(300),
+        ]);
 
         let result = tuple_expr.index(Expression::Number(0));
         assert_eq!(result, Some(Expression::Number(100)));
@@ -2431,14 +2485,17 @@ mod tests {
         assert_eq!(result, Some(Expression::Number(200)));
 
         let result = tuple_expr.index(Expression::Number(2));
+        assert_eq!(result, Some(Expression::Number(300)));
+
+        let result = tuple_expr.index(Expression::Number(3));
         assert_eq!(result, None);
     }
 
     #[test]
     fn test_nested_property_access() {
         let nested_expr = Expression::List(vec![
-            Expression::Tuple(Box::new((Expression::Number(1), Expression::Number(2)))),
-            Expression::Tuple(Box::new((Expression::Number(3), Expression::Number(4)))),
+            Expression::Tuple(vec![Expression::Number(1), Expression::Number(2)]),
+            Expression::Tuple(vec![Expression::Number(3), Expression::Number(4)]),
         ]);
 
         // Access nested_expr[1][0] (should be 3)
