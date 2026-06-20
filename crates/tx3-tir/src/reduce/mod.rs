@@ -399,6 +399,25 @@ fn arg_value_into_expr(arg: ArgValue) -> Expression {
         ArgValue::Bytes(x) => Expression::Bytes(x),
         ArgValue::UtxoSet(x) => Expression::UtxoSet(x),
         ArgValue::UtxoRef(x) => Expression::UtxoRefs(vec![x]),
+        ArgValue::List(xs) => {
+            Expression::List(xs.into_iter().map(arg_value_into_expr).collect())
+        }
+        ArgValue::Tuple(xs) => {
+            Expression::Tuple(xs.into_iter().map(arg_value_into_expr).collect())
+        }
+        ArgValue::Map(pairs) => Expression::Map(
+            pairs
+                .into_iter()
+                .map(|(k, v)| (arg_value_into_expr(k), arg_value_into_expr(v)))
+                .collect(),
+        ),
+        ArgValue::Struct {
+            constructor,
+            fields,
+        } => Expression::Struct(StructExpr {
+            constructor,
+            fields: fields.into_iter().map(arg_value_into_expr).collect(),
+        }),
     }
 }
 
@@ -1510,7 +1529,7 @@ impl Apply for Tx {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ArgValue {
     Int(i128),
     Bool(bool),
@@ -1519,6 +1538,16 @@ pub enum ArgValue {
     Address(Vec<u8>),
     UtxoSet(UtxoSet),
     UtxoRef(UtxoRef),
+
+    // `Struct` fields are positional with their constructor index; names and
+    // order are resolved upstream, so this layer never sees a by-name record.
+    List(Vec<ArgValue>),
+    Tuple(Vec<ArgValue>),
+    Map(Vec<(ArgValue, ArgValue)>),
+    Struct {
+        constructor: usize,
+        fields: Vec<ArgValue>,
+    },
 }
 
 impl From<Vec<u8>> for ArgValue {
@@ -2515,5 +2544,94 @@ mod tests {
             Expression::Number(n) => assert_eq!(n, 3),
             _ => panic!("Expected number 3"),
         }
+    }
+
+    #[test]
+    fn test_arg_value_list_into_expr() {
+        let arg = ArgValue::List(vec![ArgValue::Int(1), ArgValue::Int(2)]);
+        assert_eq!(
+            arg_value_into_expr(arg),
+            Expression::List(vec![Expression::Number(1), Expression::Number(2)])
+        );
+    }
+
+    #[test]
+    fn test_arg_value_tuple_into_expr() {
+        let arg = ArgValue::Tuple(vec![ArgValue::Int(7), ArgValue::Bytes(vec![0xff])]);
+        assert_eq!(
+            arg_value_into_expr(arg),
+            Expression::Tuple(vec![Expression::Number(7), Expression::Bytes(vec![0xff])])
+        );
+    }
+
+    #[test]
+    fn test_arg_value_map_into_expr() {
+        let arg = ArgValue::Map(vec![(
+            ArgValue::String("k".to_string()),
+            ArgValue::Int(100),
+        )]);
+        assert_eq!(
+            arg_value_into_expr(arg),
+            Expression::Map(vec![(
+                Expression::String("k".to_string()),
+                Expression::Number(100)
+            )])
+        );
+    }
+
+    #[test]
+    fn test_arg_value_struct_into_expr() {
+        let arg = ArgValue::Struct {
+            constructor: 1,
+            fields: vec![ArgValue::Int(5)],
+        };
+        assert_eq!(
+            arg_value_into_expr(arg),
+            Expression::Struct(StructExpr {
+                constructor: 1,
+                fields: vec![Expression::Number(5)],
+            })
+        );
+    }
+
+    #[test]
+    fn test_apply_args_nested_struct() {
+        // A record param nesting a parametric `List<Int>`: a positional
+        // `ArgValue::Struct` substitutes into the param and reduces to a constant.
+        let template = Expression::EvalParam(Box::new(Param::ExpectValue(
+            "meta".to_string(),
+            Type::Custom("Meta".to_string()),
+        )));
+
+        assert!(!template.is_constant());
+
+        let args = BTreeMap::from([(
+            "meta".to_string(),
+            ArgValue::Struct {
+                constructor: 0,
+                fields: vec![
+                    ArgValue::List(vec![ArgValue::Int(1), ArgValue::Int(2), ArgValue::Int(3)]),
+                    ArgValue::Int(7),
+                ],
+            },
+        )]);
+
+        let reduced = template.apply_args(&args).unwrap().reduce().unwrap();
+
+        assert_eq!(
+            reduced,
+            Expression::Struct(StructExpr {
+                constructor: 0,
+                fields: vec![
+                    Expression::List(vec![
+                        Expression::Number(1),
+                        Expression::Number(2),
+                        Expression::Number(3),
+                    ]),
+                    Expression::Number(7),
+                ],
+            })
+        );
+        assert!(reduced.is_constant());
     }
 }
