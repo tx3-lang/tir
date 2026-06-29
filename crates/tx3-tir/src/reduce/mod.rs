@@ -73,6 +73,17 @@ impl Indexable for Expression {
             Expression::List(x) => x.get(index.as_number()? as usize).cloned(),
             Expression::Tuple(x) => x.get(index.as_number()? as usize).cloned(),
             Expression::Struct(x) => x.index(index.clone()),
+            // A `UtxoRef`-typed value lowers to a single-element `UtxoRefs`.
+            // Property access targets the ref's fields by index: `tx_hash` (0)
+            // maps to the txid bytes, `output_index` (1) to the output index.
+            Expression::UtxoRefs(refs) => {
+                let r = refs.first()?;
+                match index.as_number()? {
+                    0 => Some(Expression::Bytes(r.txid.clone())),
+                    1 => Some(Expression::Number(r.index as i128)),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
@@ -2221,6 +2232,41 @@ mod tests {
         let reduced = op.reduce();
 
         match reduced {
+            Err(Error::PropertyIndexNotFound(100, _)) => (),
+            _ => panic!("Expected property index not found"),
+        };
+    }
+
+    #[test]
+    fn test_reduce_utxoref_property_access() {
+        // A `UtxoRef`-typed argument lowers to a single-element `UtxoRefs`.
+        // `.tx_hash` (property index 0) yields the txid bytes; `.output_index`
+        // (property index 1) yields the output index.
+        let object = Expression::UtxoRefs(vec![UtxoRef {
+            txid: vec![0xde, 0xad, 0xbe, 0xef],
+            index: 7,
+        }]);
+
+        let tx_hash = Expression::EvalBuiltIn(Box::new(BuiltInOp::Property(
+            object.clone(),
+            Expression::Number(0),
+        )));
+        assert_eq!(
+            tx_hash.reduce().unwrap(),
+            Expression::Bytes(vec![0xde, 0xad, 0xbe, 0xef])
+        );
+
+        let output_index = Expression::EvalBuiltIn(Box::new(BuiltInOp::Property(
+            object.clone(),
+            Expression::Number(1),
+        )));
+        assert_eq!(output_index.reduce().unwrap(), Expression::Number(7));
+
+        let missing = Expression::EvalBuiltIn(Box::new(BuiltInOp::Property(
+            object.clone(),
+            Expression::Number(100),
+        )));
+        match missing.reduce() {
             Err(Error::PropertyIndexNotFound(100, _)) => (),
             _ => panic!("Expected property index not found"),
         };
