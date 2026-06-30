@@ -89,7 +89,7 @@ impl Indexable for Expression {
 /// checker only permits property access on a value typed `UtxoRef`, which is
 /// always the singleton case.
 //
-// TODO: replace this workaround with a distinct scalar `Expression::UtxoRef`
+// TODO(#6): replace this workaround with a distinct scalar `Expression::UtxoRef`
 // variant, separate from `UtxoRefs` (a list) and `UtxoSet` (a resolved query).
 // Lower `ast::UtxoRef` literals and `ArgValue::UtxoRef` args to it, define
 // `Indexable` on it directly, and have `expr_into_utxo_refs` coerce all three.
