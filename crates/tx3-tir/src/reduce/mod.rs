@@ -73,8 +73,35 @@ impl Indexable for Expression {
             Expression::List(x) => x.get(index.as_number()? as usize).cloned(),
             Expression::Tuple(x) => x.get(index.as_number()? as usize).cloned(),
             Expression::Struct(x) => x.index(index.clone()),
+            Expression::UtxoRefs(refs) => index_utxo_ref_as_scalar(refs, index),
             _ => None,
         }
+    }
+}
+
+/// Indexes a `UtxoRef`-typed value's fields by property index.
+///
+/// HACK: a scalar `UtxoRef` value (a tx arg, or a literal ref held in a datum)
+/// has no dedicated TIR representation — it lowers to a single-element
+/// `UtxoRefs`, the same variant used for a *list* of references. So property
+/// access (`ref.tx_hash`, `ref.output_index`) has to reach into the collection
+/// and treat its sole element as the scalar. We take `first()` because the type
+/// checker only permits property access on a value typed `UtxoRef`, which is
+/// always the singleton case.
+//
+// TODO(#6): replace this workaround with a distinct scalar `Expression::UtxoRef`
+// variant, separate from `UtxoRefs` (a list) and `UtxoSet` (a resolved query).
+// Lower `ast::UtxoRef` literals and `ArgValue::UtxoRef` args to it, define
+// `Indexable` on it directly, and have `expr_into_utxo_refs` coerce all three.
+// This is a v1beta0 wire-format change (new serialized variant), so it lands in
+// a later minor with the codegen tag move — not in this patch.
+fn index_utxo_ref_as_scalar(refs: &[UtxoRef], index: Expression) -> Option<Expression> {
+    let r = refs.first()?;
+    match index.as_number()? {
+        // Field order mirrors `Type::UtxoRef`: tx_hash (0), output_index (1).
+        0 => Some(Expression::Bytes(r.txid.clone())),
+        1 => Some(Expression::Number(r.index as i128)),
+        _ => None,
     }
 }
 
@@ -2221,6 +2248,41 @@ mod tests {
         let reduced = op.reduce();
 
         match reduced {
+            Err(Error::PropertyIndexNotFound(100, _)) => (),
+            _ => panic!("Expected property index not found"),
+        };
+    }
+
+    #[test]
+    fn test_reduce_utxoref_property_access() {
+        // A `UtxoRef`-typed argument lowers to a single-element `UtxoRefs`.
+        // `.tx_hash` (property index 0) yields the txid bytes; `.output_index`
+        // (property index 1) yields the output index.
+        let object = Expression::UtxoRefs(vec![UtxoRef {
+            txid: vec![0xde, 0xad, 0xbe, 0xef],
+            index: 7,
+        }]);
+
+        let tx_hash = Expression::EvalBuiltIn(Box::new(BuiltInOp::Property(
+            object.clone(),
+            Expression::Number(0),
+        )));
+        assert_eq!(
+            tx_hash.reduce().unwrap(),
+            Expression::Bytes(vec![0xde, 0xad, 0xbe, 0xef])
+        );
+
+        let output_index = Expression::EvalBuiltIn(Box::new(BuiltInOp::Property(
+            object.clone(),
+            Expression::Number(1),
+        )));
+        assert_eq!(output_index.reduce().unwrap(), Expression::Number(7));
+
+        let missing = Expression::EvalBuiltIn(Box::new(BuiltInOp::Property(
+            object.clone(),
+            Expression::Number(100),
+        )));
+        match missing.reduce() {
             Err(Error::PropertyIndexNotFound(100, _)) => (),
             _ => panic!("Expected property index not found"),
         };
