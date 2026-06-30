@@ -10,7 +10,7 @@ license = "Apache-2.0"
 repository = "https://github.com/tx3-lang/tir"
 homepage = "https://github.com/tx3-lang/tir"
 documentation = "https://docs.rs/tx3-tir"
-version = "0.19.0"
+version = "0.19.1"
 keywords = ["blockchain", "cardano", "utxo", "dsl"]
 readme = "README.md"
 
