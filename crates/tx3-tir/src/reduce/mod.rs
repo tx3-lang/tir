@@ -88,10 +88,13 @@ impl Indexable for Expression {
 /// and treat its sole element as the scalar. We take `first()` because the type
 /// checker only permits property access on a value typed `UtxoRef`, which is
 /// always the singleton case.
-///
-/// The principled fix is a distinct scalar `Expression::UtxoRef` variant with
-/// `Indexable` defined on it directly; that is a wire-format change deferred to
-/// a later minor. Until then this keeps the workaround in one named place.
+//
+// TODO: replace this workaround with a distinct scalar `Expression::UtxoRef`
+// variant, separate from `UtxoRefs` (a list) and `UtxoSet` (a resolved query).
+// Lower `ast::UtxoRef` literals and `ArgValue::UtxoRef` args to it, define
+// `Indexable` on it directly, and have `expr_into_utxo_refs` coerce all three.
+// This is a v1beta0 wire-format change (new serialized variant), so it lands in
+// a later minor with the codegen tag move — not in this patch.
 fn index_utxo_ref_as_scalar(refs: &[UtxoRef], index: Expression) -> Option<Expression> {
     let r = refs.first()?;
     match index.as_number()? {
