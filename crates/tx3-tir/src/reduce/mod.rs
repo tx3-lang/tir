@@ -73,19 +73,32 @@ impl Indexable for Expression {
             Expression::List(x) => x.get(index.as_number()? as usize).cloned(),
             Expression::Tuple(x) => x.get(index.as_number()? as usize).cloned(),
             Expression::Struct(x) => x.index(index.clone()),
-            // A `UtxoRef`-typed value lowers to a single-element `UtxoRefs`.
-            // Property access targets the ref's fields by index: `tx_hash` (0)
-            // maps to the txid bytes, `output_index` (1) to the output index.
-            Expression::UtxoRefs(refs) => {
-                let r = refs.first()?;
-                match index.as_number()? {
-                    0 => Some(Expression::Bytes(r.txid.clone())),
-                    1 => Some(Expression::Number(r.index as i128)),
-                    _ => None,
-                }
-            }
+            Expression::UtxoRefs(refs) => index_utxo_ref_as_scalar(refs, index),
             _ => None,
         }
+    }
+}
+
+/// Indexes a `UtxoRef`-typed value's fields by property index.
+///
+/// HACK: a scalar `UtxoRef` value (a tx arg, or a literal ref held in a datum)
+/// has no dedicated TIR representation — it lowers to a single-element
+/// `UtxoRefs`, the same variant used for a *list* of references. So property
+/// access (`ref.tx_hash`, `ref.output_index`) has to reach into the collection
+/// and treat its sole element as the scalar. We take `first()` because the type
+/// checker only permits property access on a value typed `UtxoRef`, which is
+/// always the singleton case.
+///
+/// The principled fix is a distinct scalar `Expression::UtxoRef` variant with
+/// `Indexable` defined on it directly; that is a wire-format change deferred to
+/// a later minor. Until then this keeps the workaround in one named place.
+fn index_utxo_ref_as_scalar(refs: &[UtxoRef], index: Expression) -> Option<Expression> {
+    let r = refs.first()?;
+    match index.as_number()? {
+        // Field order mirrors `Type::UtxoRef`: tx_hash (0), output_index (1).
+        0 => Some(Expression::Bytes(r.txid.clone())),
+        1 => Some(Expression::Number(r.index as i128)),
+        _ => None,
     }
 }
 
