@@ -57,7 +57,7 @@ impl Indexable for StructExpr {
         // numeric indices represent the index of the field of the struct
         match index {
             Expression::Number(n) => self.fields.get(n as usize).cloned(),
-            _ => return None,
+            _ => None,
         }
     }
 }
@@ -753,7 +753,7 @@ impl Composite for Coerce {
             Self::NoOp(x) => Ok(Self::NoOp(x)),
             Self::IntoAssets(x) => Ok(Self::NoOp(x.into_assets()?)),
             Self::IntoDatum(x) => Ok(Self::NoOp(x.into_datum()?)),
-            Self::IntoScript(x) => todo!(),
+            Self::IntoScript(_x) => todo!(),
         }
     }
 }
@@ -1535,6 +1535,7 @@ impl Apply for Tx {
         queries
     }
 
+    #[allow(unstable_name_collisions)]
     fn reduce(self) -> Result<Self, Error> {
         Ok(Self {
             references: self.references.reduce()?,
@@ -2109,7 +2110,7 @@ mod tests {
         }];
 
         let op = Coerce::IntoAssets(Expression::UtxoSet(
-            std::collections::HashSet::from_iter(utxos.clone().into_iter()).into(),
+            std::collections::HashSet::from_iter(utxos.clone()).into(),
         ));
 
         let reduced = op.reduce().unwrap();
@@ -2131,7 +2132,7 @@ mod tests {
         }];
 
         let op = Coerce::IntoDatum(Expression::UtxoSet(
-            std::collections::HashSet::from_iter(utxos.clone().into_iter()).into(),
+            std::collections::HashSet::from_iter(utxos.clone()).into(),
         ));
 
         let reduced = op.reduce().unwrap();
