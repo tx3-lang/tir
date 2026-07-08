@@ -130,7 +130,7 @@ impl CanonicalAssets {
     }
 
     pub fn classes(&self) -> HashSet<AssetClass> {
-        self.iter().map(|(class, _)| class.clone()).collect()
+        self.keys().cloned().collect()
     }
 
     pub fn naked_amount(&self) -> Option<i128> {
@@ -356,8 +356,8 @@ mod tests {
         defined2 in any_positive_asset(),
       ) -> CanonicalAssets {
         let naked = CanonicalAssets::from_naked_amount(naked_amount);
-        let composite = naked + defined1 + defined2;
-        composite
+
+        naked + defined1 + defined2
       }
     }
 
