@@ -426,12 +426,8 @@ fn arg_value_into_expr(arg: ArgValue) -> Expression {
         ArgValue::Bytes(x) => Expression::Bytes(x),
         ArgValue::UtxoSet(x) => Expression::UtxoSet(x),
         ArgValue::UtxoRef(x) => Expression::UtxoRefs(vec![x]),
-        ArgValue::List(xs) => {
-            Expression::List(xs.into_iter().map(arg_value_into_expr).collect())
-        }
-        ArgValue::Tuple(xs) => {
-            Expression::Tuple(xs.into_iter().map(arg_value_into_expr).collect())
-        }
+        ArgValue::List(xs) => Expression::List(xs.into_iter().map(arg_value_into_expr).collect()),
+        ArgValue::Tuple(xs) => Expression::Tuple(xs.into_iter().map(arg_value_into_expr).collect()),
         ArgValue::Map(pairs) => Expression::Map(
             pairs
                 .into_iter()
