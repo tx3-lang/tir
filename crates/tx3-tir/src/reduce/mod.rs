@@ -2141,6 +2141,75 @@ mod tests {
     }
 
     #[test]
+    fn test_property_access_on_into_datum_from_utxo_set() {
+        // `Property(IntoDatum(UtxoSet_with_struct_datum), idx)` reduces to the
+        // datum field — single-level and nested.
+        let datum = Expression::Struct(StructExpr {
+            constructor: 0,
+            fields: vec![
+                Expression::Number(42),
+                Expression::Bytes(b"policy".to_vec()),
+                Expression::Bytes(b"name".to_vec()),
+            ],
+        });
+
+        let utxos = vec![Utxo {
+            r#ref: UtxoRef::new(b"settings", 0),
+            address: b"vault".into(),
+            datum: Some(datum.clone()),
+            assets: CanonicalAssets::from_naked_amount(2_000_000),
+            script: None,
+        }];
+
+        let inner = Expression::EvalCoerce(Box::new(Coerce::IntoDatum(Expression::UtxoSet(
+            std::collections::HashSet::from_iter(utxos).into(),
+        ))));
+
+        // Single-level: field 0 (fee) → 42
+        let op = Expression::EvalBuiltIn(Box::new(BuiltInOp::Property(
+            inner.clone(),
+            Expression::Number(0),
+        )));
+        assert_eq!(op.reduce().unwrap(), Expression::Number(42));
+
+        // Single-level: field 1 (policy) → b"policy"
+        let op = Expression::EvalBuiltIn(Box::new(BuiltInOp::Property(
+            inner.clone(),
+            Expression::Number(1),
+        )));
+        assert_eq!(op.reduce().unwrap(), Expression::Bytes(b"policy".to_vec()));
+
+        // Multi-level: `Property(Property(IntoDatum(UtxoSet), 0), 0)`.
+        let nested_datum = Expression::Struct(StructExpr {
+            constructor: 0,
+            fields: vec![Expression::Struct(StructExpr {
+                constructor: 0,
+                fields: vec![Expression::Number(99)],
+            })],
+        });
+
+        let nested_utxos = vec![Utxo {
+            r#ref: UtxoRef::new(b"oracle", 0),
+            address: b"vault".into(),
+            datum: Some(nested_datum),
+            assets: CanonicalAssets::from_naked_amount(1_000_000),
+            script: None,
+        }];
+
+        let nested_inner = Expression::EvalCoerce(Box::new(Coerce::IntoDatum(
+            Expression::UtxoSet(std::collections::HashSet::from_iter(nested_utxos).into()),
+        )));
+
+        let outer = Expression::EvalBuiltIn(Box::new(BuiltInOp::Property(
+            nested_inner,
+            Expression::Number(0),
+        )));
+        let op =
+            Expression::EvalBuiltIn(Box::new(BuiltInOp::Property(outer, Expression::Number(0))));
+        assert_eq!(op.reduce().unwrap(), Expression::Number(99));
+    }
+
+    #[test]
     fn test_reduce_struct_property_access() {
         let object = Expression::Struct(StructExpr {
             constructor: 0,
